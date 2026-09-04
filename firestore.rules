@@ -1,0 +1,80 @@
+rules_version = '2';
+
+// Baseline — two people, separate plans, mutual read.
+//
+// The shape of the permission is the shape of the product decision:
+//   read  — either member may read either member's data
+//   write — a member may write only under their own uid
+//
+// That is what makes "everything is viewable" safe. Neither person can edit the
+// other's numbers even by accident, so a shared view can never corrupt a plan.
+//
+// Progress photos are absent from these rules because they are absent from the
+// cloud entirely — there is no Storage bucket in this app and no upload path in
+// the client. If you later add one, note that these rules do not cover Storage.
+//
+// Deploy:  firebase deploy --only firestore:rules
+// Or paste into Firebase console → Firestore → Rules → Publish.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Replace these two with your real Google account UIDs. ----
+    // Find them in Firebase console → Authentication → Users, after each of
+    // you has signed in once. Until then, sign-in works and writes are denied.
+    function household() {
+      return [
+        'PASTE_YOUR_UID_HERE',
+        'PASTE_HER_UID_HERE'
+      ];
+    }
+
+    function isMember() {
+      return request.auth != null && request.auth.uid in household();
+    }
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Who is in the household. Everyone reads it; you may only write your own
+    // entry, so nobody can remove or impersonate the other person.
+    match /baseline_meta/household {
+      allow read: if isMember();
+
+      allow create: if isMember()
+        && request.resource.data.members.keys().hasOnly([request.auth.uid]);
+
+      allow update: if isMember()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+        && request.resource.data.members.diff(resource.data.members)
+             .affectedKeys().hasOnly([request.auth.uid]);
+    }
+
+    // A person's plan and settings.
+    match /baseline_users/{uid} {
+      allow read: if isMember();
+      allow write: if isOwner(uid) && isMember();
+
+      // Every data collection follows the same rule: read by either, write by
+      // the owner. Listing them explicitly rather than using a wildcard keeps
+      // an accidental new collection from inheriting access.
+      match /weights/{docId}     { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /waists/{docId}      { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /food/{docId}        { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /workouts/{docId}    { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /metrics/{docId}     { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /savedMeals/{docId}  { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /corrections/{docId} { allow read: if isMember(); allow write: if isOwner(uid); }
+      match /reviews/{docId}     { allow read: if isMember(); allow write: if isOwner(uid); }
+    }
+
+    // No catch-all. Firestore rules are additive — an allow anywhere grants
+    // access regardless of what follows — so a trailing deny-all would be
+    // decorative. Anything not matched above is denied by default.
+    //
+    // If you host Baseline in the same Firebase project as Receipt360, merge
+    // both files' match blocks into one ruleset rather than replacing. Every
+    // collection here is prefixed `baseline_`, so nothing collides.
+  }
+}

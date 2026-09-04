@@ -1,0 +1,26 @@
+# Must match the Worker name in the Cloudflare dashboard. The live Worker is
+# "baseline". A mismatch makes `wrangler deploy` create a SECOND Worker at a
+# different URL instead of updating the live one.
+name = "baseline"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# NOTE: this Worker is managed through the Cloudflare dashboard, not Wrangler.
+# ALLOWED_ORIGIN and MODEL below are the fallback for a CLI deploy; the values
+# that are actually live were set in Settings -> Variables and Secrets. If you
+# ever run `wrangler deploy`, these [vars] OVERWRITE the dashboard ones —
+# secrets survive, plaintext vars do not. Keep them in sync or stay on the UI.
+[vars]
+# Must be the EXACT origin of your deployed site — scheme + host, no path,
+# no trailing slash. A mismatch here shows up as a CORS failure in the browser
+# and as "Could not reach the estimator" in the app.
+#
+#   GitHub Pages project site:  https://<username>.github.io
+#   Local testing:              http://localhost:8080
+#
+# Set to "*" only while you are testing. It leaves your key open to any page.
+ALLOWED_ORIGIN = "https://CHANGE-ME.github.io"
+
+# Vision quality decides how good the food estimates are. Sonnet is the sane
+# default; Haiku is cheaper and noticeably worse on mixed plates.
+MODEL = "claude-sonnet-5"
