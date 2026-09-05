@@ -46,7 +46,7 @@ export default {
     }
 
     let messages;
-    let maxTokens = 1200;
+    let maxTokens = 4000;
 
     if (path.endsWith('/vision')) {
       const image = body.image || {};

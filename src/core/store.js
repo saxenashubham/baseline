@@ -8,7 +8,10 @@
  */
 
 import { db, newId } from './db.js';
-import { todayISO, weekStart } from './format.js';
+import {
+  todayISO, weekStart, round, convertWeight, convertLength,
+  weightUnit as weightUnitOf, lengthUnit as lengthUnitOf
+} from './format.js';
 
 const listeners = new Set();
 
@@ -90,7 +93,8 @@ export function setAuth(user) {
 
 function defaultSettings() {
   return {
-    units: 'imperial',
+    // Units live on the profile, not here — they are part of the person, and
+    // the You/Partner switcher has to read them per person.
     // Default proxy for a device that has never saved settings. Saved settings
     // win over this (see loadAll: defaults spread first, kv.settings second),
     // so a device with an existing empty value still needs Profile -> AI once.
@@ -164,6 +168,67 @@ export async function saveSettings(patch) {
   await db.put('kv', { key: 'settings', value: next });
   state.settings = next;
   notify('settings');
+  return next;
+}
+
+/**
+ * Change the weight and/or length unit, converting everything already stored.
+ *
+ * Weigh-ins and waist measurements are persisted in the unit they were entered
+ * in, not in a canonical one. That is fine while the unit never changes and
+ * catastrophic the moment it does — 199 lb of history would silently reread as
+ * 199 kg. So the switch is not a settings flag: it rewrites every affected
+ * record in one pass, and the profile's own fields with them.
+ *
+ * Weight and length are converted independently. Passing only one leaves the
+ * other exactly as it was.
+ */
+export async function changeUnits({ weightUnit: nextW, lengthUnit: nextL } = {}) {
+  const profile = state.profile;
+  if (!profile) return null;
+  const fromW = weightUnitOf(profile);
+  const fromL = lengthUnitOf(profile);
+  const toW = nextW || fromW;
+  const toL = nextL || fromL;
+  if (toW === fromW && toL === fromL) return profile;
+
+  const w = (v) => round(convertWeight(v, fromW, toW), 1);
+  const l = (v) => round(convertLength(v, fromL, toL), 1);
+
+  if (toW !== fromW) {
+    const weights = state.weights.map((rec) => ({ ...rec, weight: w(rec.weight) }));
+    await db.putMany('weights', weights);
+    state.weights = weights.sort(byDate);
+    for (const rec of weights) mirror('weights', rec);
+  }
+
+  if (toL !== fromL) {
+    const waists = state.waists.map((rec) => ({ ...rec, waist: l(rec.waist) }));
+    await db.putMany('waists', waists);
+    state.waists = waists.sort(byDate);
+    for (const rec of waists) mirror('waists', rec);
+  }
+
+  const patch = {
+    weightUnit: toW,
+    lengthUnit: toL,
+    // The legacy field is kept in step only when both axes agree; a mixed pair
+    // has no honest 'metric'/'imperial' value, so it is dropped rather than
+    // guessed at. Everything reads weightUnit/lengthUnit now.
+    units: toW === 'kg' && toL === 'cm' ? 'metric' : toW === 'lb' && toL === 'in' ? 'imperial' : null
+  };
+  if (toW !== fromW) {
+    patch.weight = w(profile.weight);
+    patch.startWeight = w(profile.startWeight);
+    patch.weeklyRate = round(convertWeight(profile.weeklyRate, fromW, toW), 2);
+  }
+  if (toL !== fromL) {
+    patch.height = l(profile.height);
+    patch.startWaist = l(profile.startWaist);
+  }
+
+  const next = await saveProfile(patch);
+  notify('weights', 'waists', 'profile');
   return next;
 }
 

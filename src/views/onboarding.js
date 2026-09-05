@@ -7,7 +7,9 @@ import { h, fill, clear } from '../core/dom.js';
 import { field, numberInput, chipGroup, toast, progressBar } from '../ui/components.js';
 import { buildTargets, ACTIVITY_LABELS, predictedTDEE } from '../domain/targets.js';
 import { saveProfile, logWeight, logWaist, savePhoto } from '../core/store.js';
-import { todayISO, isoAddDays, KG_PER_LB, CM_PER_IN, fmtNum } from '../core/format.js';
+import {
+  todayISO, isoAddDays, fmtNum, round, convertLength, toKg, toCm
+} from '../core/format.js';
 import { toBlob } from '../services/image.js';
 import { navigate } from '../core/router.js';
 
@@ -16,7 +18,8 @@ export function onboardingView() {
     name: '',
     age: 35,
     sex: 'male',
-    units: 'imperial',
+    weightUnit: 'lb',
+    lengthUnit: 'in',
     height: 67,
     weight: null,
     waist: null,
@@ -54,13 +57,12 @@ export function onboardingView() {
   /* ------------------------------------------------------------ step 1 */
 
   function stepProfile() {
-    const heightMetric = () => draft.units === 'metric';
     const heightInput = numberInput({
       value: draft.height,
       onInput: (e) => { draft.height = Number(e.target.value); }
     });
     const ageInput = numberInput({ value: draft.age, onInput: (e) => { draft.age = Number(e.target.value); } });
-    const heightWrap = field(heightMetric() ? 'Height (cm)' : 'Height (inches)', heightInput);
+    const heightWrap = field(draft.lengthUnit === 'cm' ? 'Height (cm)' : 'Height (inches)', heightInput);
 
     const next = h('button.btn.primary.block', {
       type: 'button',
@@ -74,20 +76,26 @@ export function onboardingView() {
 
     return h('div.stack', null, [
       h('h2.section', null, 'About you'),
-      field('Units', chipGroup({
-        options: [{ value: 'imperial', label: 'lb / inches' }, { value: 'metric', label: 'kg / cm' }],
-        value: draft.units,
+      field('Weigh in', chipGroup({
+        options: [{ value: 'lb', label: 'Pounds' }, { value: 'kg', label: 'Kilograms' }],
+        value: draft.weightUnit,
         onChange: (v) => {
-          if (v === draft.units) return;
-          draft.height = v === 'metric'
-            ? Math.round(draft.height * CM_PER_IN)
-            : Math.round(draft.height / CM_PER_IN);
-          draft.units = v;
-          draft.weeklyRate = v === 'metric' ? 0.45 : 1;
-          heightInput.value = draft.height;
-          fill(heightWrap.querySelector('span'), v === 'metric' ? 'Height (cm)' : 'Height (inches)');
+          if (v === draft.weightUnit) return;
+          draft.weightUnit = v;
+          draft.weeklyRate = v === 'kg' ? 0.45 : 1;
         }
       })),
+      field('Measure in', chipGroup({
+        options: [{ value: 'in', label: 'Inches' }, { value: 'cm', label: 'Centimetres' }],
+        value: draft.lengthUnit,
+        onChange: (v) => {
+          if (v === draft.lengthUnit) return;
+          draft.height = round(convertLength(draft.height, draft.lengthUnit, v), 1);
+          draft.lengthUnit = v;
+          heightInput.value = draft.height;
+          fill(heightWrap.querySelector('span'), v === 'cm' ? 'Height (cm)' : 'Height (inches)');
+        }
+      }), 'Height and waist. Independent of the scale — inches and kilograms is a perfectly normal pair.'),
       field('Age', ageInput),
       field('Sex', chipGroup({
         options: [{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }],
@@ -124,11 +132,11 @@ export function onboardingView() {
 
   function stepBaseline() {
     const weightInput = numberInput({
-      placeholder: draft.units === 'metric' ? 'kg' : 'lb',
+      placeholder: draft.weightUnit,
       onInput: (e) => { draft.weight = Number(e.target.value); }
     });
     const waistInput = numberInput({
-      placeholder: draft.units === 'metric' ? 'cm' : 'inches',
+      placeholder: draft.lengthUnit === 'cm' ? 'cm' : 'inches',
       onInput: (e) => { draft.waist = Number(e.target.value); }
     });
 
@@ -155,8 +163,8 @@ export function onboardingView() {
       h('h2.section', null, 'Baseline'),
       h('p.muted.small', null,
         'Weigh in first thing, after the bathroom, before eating. Every future comparison is against this.'),
-      field(`Weight (${draft.units === 'metric' ? 'kg' : 'lb'})`, weightInput),
-      field(`Waist at the navel (${draft.units === 'metric' ? 'cm' : 'inches'})`, waistInput),
+      field(`Weight (${draft.weightUnit})`, weightInput),
+      field(`Waist at the navel (${draft.lengthUnit === 'cm' ? 'cm' : 'inches'})`, waistInput),
       h('div', null, [
         h('div.small.muted', { style: { marginBottom: '8px' } },
           'Photos are optional and stay on this device. Same spot, same light, same time of day.'),
@@ -185,8 +193,8 @@ export function onboardingView() {
   function stepGoal() {
     const profileForCalc = {
       ...draft,
-      weightKg: draft.units === 'metric' ? draft.weight : draft.weight * KG_PER_LB,
-      heightCm: draft.units === 'metric' ? draft.height : draft.height * CM_PER_IN
+      weightKg: toKg(draft.weight, draft.weightUnit),
+      heightCm: toCm(draft.height, draft.lengthUnit)
     };
     let targets = buildTargets(profileForCalc, { rate: draft.weeklyRate });
 
@@ -237,7 +245,7 @@ export function onboardingView() {
         onChange: (v) => { draft.goal = v; refresh(); }
       })),
       field('Rate per week', chipGroup({
-        options: draft.units === 'metric'
+        options: draft.weightUnit === 'kg'
           ? [{ value: 0.23, label: '0.25 kg' }, { value: 0.45, label: '0.45 kg' }, { value: 0.68, label: '0.7 kg' }]
           : [{ value: 0.5, label: '0.5 lb' }, { value: 1, label: '1 lb' }, { value: 1.5, label: '1.5 lb' }],
         value: draft.weeklyRate,

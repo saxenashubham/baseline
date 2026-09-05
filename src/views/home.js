@@ -15,7 +15,9 @@ import { trendChart } from '../ui/chart.js';
 import {
   state, view, isReadOnly, totalsOn, metricsOn, foodOn, logWeight, saveMetrics, programDay
 } from '../core/store.js';
-import { todayISO, fmtNum, fmtTime, signed, fmtDuration, fmtWeight } from '../core/format.js';
+import {
+  todayISO, fmtNum, fmtTime, signed, fmtDuration, fmtWeight, weightUnit
+} from '../core/format.js';
 import { buildSnapshot, classify, STATE_COPY, fluctuationNote, flatWeekStreak } from '../domain/engine.js';
 import { navigate } from '../core/router.js';
 
@@ -23,7 +25,7 @@ export function homeView() {
   const today = todayISO();
   // Read through view() so the same screen renders either person's data. The
   // switcher in the header is the only thing that changes which one.
-  let units = view().profile?.units || 'imperial';
+  let wUnit = weightUnit(view().profile);
   let targets = view().profile?.targets || {};
 
   const heroTrend = h('div.hero-trend');
@@ -105,7 +107,7 @@ export function homeView() {
   function openWeighIn() {
     const input = numberInput({
       value: state.weights.find((w) => w.date === today)?.weight ?? '',
-      placeholder: units === 'metric' ? 'kg' : 'lb',
+      placeholder: wUnit,
       autofocus: true
     });
     const note = h('input.input', { type: 'text', placeholder: 'Note (optional)' });
@@ -113,7 +115,7 @@ export function homeView() {
       title: 'Weigh in',
       body: h('div', null, [
         h('p.small.muted', null, 'Same conditions every day: first thing, after the bathroom, before food or drink.'),
-        field(`Weight (${units === 'metric' ? 'kg' : 'lb'})`, input),
+        field(`Weight (${wUnit})`, input),
         field('Note', note)
       ]),
       actions: [
@@ -166,7 +168,7 @@ export function homeView() {
   /* ------------------------------------------------------------- render */
 
   function update() {
-    units = view().profile?.units || 'imperial';
+    wUnit = weightUnit(view().profile);
     targets = view().profile?.targets || {};
     const day = programDay();
     const total = view().profile?.durationDays || 90;
@@ -178,14 +180,14 @@ export function homeView() {
 
     // Hero
     fill(heroTrend, snap.weight.trend != null
-      ? [fmtNum(snap.weight.trend, 1), h('span.unit', null, units === 'metric' ? 'kg' : 'lb')]
+      ? [fmtNum(snap.weight.trend, 1), h('span.unit', null, wUnit)]
       : ['—']);
     setText(heroLabel, snap.weight.trend != null ? '7-day trend' : 'Weigh in to start the trend');
     const wc = snap.weight.weekChange;
-    setText(heroDelta, wc != null ? `${signed(wc, 1)} ${units === 'metric' ? 'kg' : 'lb'} this week` : '');
+    setText(heroDelta, wc != null ? `${signed(wc, 1)} ${wUnit} this week` : '');
     heroDelta.className = `hero-delta ${wc != null && wc < 0 ? 'down' : wc != null && wc > 0 ? 'up' : ''}`;
     setText(heroRaw, snap.weight.latest != null
-      ? `today ${fmtWeight(snap.weight.latest, units)}`
+      ? `today ${fmtWeight(snap.weight.latest, wUnit)}`
       : 'no reading today');
     fill(chartSlot, snap.weight.series.filter((p) => p.trend != null).length > 1
       ? trendChart(snap.weight.series.slice(-28), { label: 'Weight trend', height: 150 })

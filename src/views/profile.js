@@ -10,15 +10,19 @@ import {
   appHeader, bottomNav, sheet, field, numberInput, chipGroup, toast, callout
 } from '../ui/components.js';
 import {
-  state, saveProfile, saveSettings, eraseAllData
+  state, saveProfile, saveSettings, eraseAllData, changeUnits
 } from '../core/store.js';
-import { todayISO, fmtNum, isoAddDays } from '../core/format.js';
+import {
+  todayISO, fmtNum, isoAddDays, weightUnit, lengthUnit, fmtWeight, fmtLength,
+  convertWeight, convertLength, pluralize
+} from '../core/format.js';
 import { buildTargets, predictedTDEE, ACTIVITY_LABELS } from '../domain/targets.js';
 import { buildSnapshot } from '../domain/engine.js';
 import { navigate } from '../core/router.js';
 
 export function profileView() {
   const targetsCard = h('section.card');
+  const unitsCard = h('section.card');
   const aiCard = h('section.card');
   const notifyCard = h('section.card');
   const dataCard = h('section.card');
@@ -26,7 +30,7 @@ export function profileView() {
 
   const el = h('div', null, [
     appHeader('Profile', h('a.day-badge', { href: '#/home' }, 'Done')),
-    h('div.view.stack', null, [targetsCard, aiCard, notifyCard, safetyCard, dataCard]),
+    h('div.view.stack', null, [targetsCard, unitsCard, aiCard, notifyCard, safetyCard, dataCard]),
     bottomNav('home')
   ]);
 
@@ -95,14 +99,14 @@ export function profileView() {
       title: 'You',
       body: h('div', null, [
         field('Age', age),
-        field(`Height (${p.units === 'metric' ? 'cm' : 'inches'})`, height),
+        field(`Height (${lengthUnit(p) === 'cm' ? 'cm' : 'inches'})`, height),
         field('Activity level', chipGroup({
           options: Object.keys(ACTIVITY_LABELS).map((k) => ({ value: k, label: k.replace('_', ' ') })),
           value: p.activityLevel,
           onChange: (v) => { p.activityLevel = v; }
         })),
         field('Weekly rate', chipGroup({
-          options: p.units === 'metric'
+          options: weightUnit(p) === 'kg'
             ? [{ value: 0.23, label: '0.25 kg' }, { value: 0.45, label: '0.45 kg' }, { value: 0.68, label: '0.7 kg' }]
             : [{ value: 0.5, label: '0.5 lb' }, { value: 1, label: '1 lb' }, { value: 1.5, label: '1.5 lb' }],
           value: p.weeklyRate,
@@ -125,6 +129,63 @@ export function profileView() {
         }, 'Save')
       ]
     });
+  }
+
+  /* -------------------------------------------------------------- units */
+
+  /**
+   * Weight and length are switched separately, and switching either one
+   * rewrites the history rather than reinterpreting it. Every stored weigh-in
+   * is in the unit it was typed in, so a flag flip alone would turn 199 lb of
+   * baseline into 199 kg — the sheet says exactly what it is about to convert
+   * before it does it.
+   */
+  function openUnits(axis) {
+    const p = state.profile;
+    const isWeight = axis === 'weight';
+    const current = isWeight ? weightUnit(p) : lengthUnit(p);
+    const options = isWeight
+      ? [{ value: 'lb', label: 'Pounds (lb)' }, { value: 'kg', label: 'Kilograms (kg)' }]
+      : [{ value: 'in', label: 'Inches' }, { value: 'cm', label: 'Centimetres' }];
+    let next = current;
+
+    const example = h('p.small.muted');
+    const paint = () => {
+      if (next === current) return void fill(example, 'Currently in use.');
+      const count = isWeight ? state.weights.length : state.waists.length;
+      const from = isWeight ? p.weight : (p.startWaist ?? p.height);
+      const to = isWeight ? convertWeight(from, current, next) : convertLength(from, current, next);
+      const fmt = isWeight ? fmtWeight : fmtLength;
+      const sample = from == null ? '' : ` ${fmt(from, current)} becomes ${fmt(to, next)}.`;
+      const noun = isWeight ? 'weigh-in' : 'measurement';
+      fill(example,
+        `${pluralize(count, `stored ${noun}`)} will be converted.${sample}`);
+    };
+
+    const handle = sheet({
+      title: isWeight ? 'Weight unit' : 'Length unit',
+      body: h('div', null, [
+        h('p.small.muted', null, isWeight
+          ? 'What the scale reads. Independent of how you measure your waist.'
+          : 'Height and waist. Independent of what the scale reads.'),
+        chipGroup({ options, value: current, onChange: (v) => { next = v; paint(); } }),
+        example,
+        callout('Your history is converted, not relabelled, so the trend line stays continuous across the switch.')
+      ]),
+      actions: [
+        h('button.btn.primary.block', {
+          type: 'button',
+          onClick: async () => {
+            if (next === current) return handle.close();
+            await changeUnits(isWeight ? { weightUnit: next } : { lengthUnit: next });
+            handle.close(true);
+            toast('Converted.');
+            update();
+          }
+        }, 'Save')
+      ]
+    });
+    paint();
   }
 
   /* ------------------------------------------------------------- export */
@@ -198,6 +259,22 @@ export function profileView() {
       h('div.btn-row', { style: { marginTop: '12px' } }, [
         h('button.btn', { type: 'button', onClick: openBody }, 'Edit you'),
         h('button.btn', { type: 'button', onClick: openTargets }, 'Edit targets')
+      ])
+    ]);
+
+    fill(unitsCard, [
+      h('p.card-title', null, 'Units'),
+      h('p.small.muted', null,
+        'Chosen separately. A scale in kilograms and a tape measure in inches is a normal pair, not a mistake.'),
+      h('div.metric', null, [
+        h('span.metric-name', null, 'Weight'),
+        h('button.btn.quiet', { type: 'button', onClick: () => openUnits('weight') },
+          weightUnit(p) === 'kg' ? 'Kilograms' : 'Pounds')
+      ]),
+      h('div.metric', null, [
+        h('span.metric-name', null, 'Height and waist'),
+        h('button.btn.quiet', { type: 'button', onClick: () => openUnits('length') },
+          lengthUnit(p) === 'cm' ? 'Centimetres' : 'Inches')
       ])
     ]);
 

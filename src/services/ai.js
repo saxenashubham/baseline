@@ -214,7 +214,8 @@ export async function narrateReview({ snapshot, classification, recommendation, 
 /** Send numbers, not the raw database. No photos, no notes, no free text. */
 function slimSnapshot(snap) {
   return {
-    units: snap.units,
+    weightUnit: snap.weightUnit,
+    lengthUnit: snap.lengthUnit,
     weightTrend: round1(snap.weight.trend),
     weightChangeThisWeek: round1(snap.weight.weekChange),
     weightChangePerWeek: round1(snap.weight.perWeek),
@@ -242,12 +243,11 @@ function slimSnapshot(snap) {
  */
 export function localNarration({ snapshot, classification, recommendation }) {
   const s = snapshot;
-  const unit = s.units === 'metric' ? 'kg' : 'lb';
   const wc = s.weight.weekChange;
   const parts = [];
-  if (wc != null) parts.push(`Trend weight moved ${fmtSigned(wc)} ${unit}.`);
+  if (wc != null) parts.push(`Trend weight moved ${fmtSigned(wc)} ${s.weightUnit}.`);
   if (s.waist.weekChange != null) {
-    parts.push(`Waist moved ${fmtSigned(s.waist.weekChange)} ${s.units === 'metric' ? 'cm' : 'in'}.`);
+    parts.push(`Waist moved ${fmtSigned(s.waist.weekChange)} ${s.lengthUnit}.`);
   }
   if (s.intake.avgKcal != null) {
     parts.push(`You logged ${s.intake.loggedDays} of ${s.intake.totalDays} days, averaging ${Math.round(s.intake.avgKcal)} kcal and ${Math.round(s.intake.avgProtein || 0)} g protein.`);

@@ -14,13 +14,16 @@ import {
 } from '../ui/components.js';
 import { trendChart, chartLegend } from '../ui/chart.js';
 import { state, view, isReadOnly, logWaist, savePhoto, removePhoto, programDay } from '../core/store.js';
-import { todayISO, fmtDate, signed, fmtWeight, fmtLength, daysBetween } from '../core/format.js';
+import {
+  todayISO, fmtDate, signed, fmtWeight, fmtLength, daysBetween, weightUnit, lengthUnit
+} from '../core/format.js';
 import { trendSummary } from '../domain/trends.js';
 import { toBlob } from '../services/image.js';
 
 export function progressView() {
   const today = todayISO();
-  let units = view().profile?.units || 'imperial';
+  let wUnit = weightUnit(view().profile);
+  let lUnit = lengthUnit(view().profile);
   const createdURLs = [];
 
   const url = (blob) => {
@@ -47,7 +50,7 @@ export function progressView() {
   function openWaist() {
     const input = numberInput({
       value: state.waists.find((w) => w.date === today)?.waist ?? '',
-      placeholder: units === 'metric' ? 'cm' : 'inches',
+      placeholder: lUnit === 'cm' ? 'cm' : 'inches',
       autofocus: true
     });
     const handle = sheet({
@@ -55,7 +58,7 @@ export function progressView() {
       body: h('div', null, [
         h('p.small.muted', null,
           'At the navel, relaxed, at the end of a normal breath out. Once a week is enough — daily waist readings are mostly measurement error.'),
-        field(`Waist (${units === 'metric' ? 'cm' : 'inches'})`, input)
+        field(`Waist (${lUnit === 'cm' ? 'cm' : 'inches'})`, input)
       ]),
       actions: [
         h('button.btn.primary.block', {
@@ -149,7 +152,8 @@ export function progressView() {
   /* ------------------------------------------------------------ render */
 
   function update() {
-    units = view().profile?.units || 'imperial';
+    wUnit = weightUnit(view().profile);
+    lUnit = lengthUnit(view().profile);
     fill(noticeSlot, readOnlyNotice());
     const day = programDay() || 0;
     const total = view().profile?.durationDays || 90;
@@ -177,12 +181,12 @@ export function progressView() {
       h('div.row.between', null, [
         h('p.card-title', { style: { margin: 0 } }, 'Weight'),
         h('span.small.muted', null, weight.perWeek != null
-          ? `${signed(weight.perWeek, 2)} ${units === 'metric' ? 'kg' : 'lb'}/week`
+          ? `${signed(weight.perWeek, 2)} ${wUnit}/week`
           : '')
       ]),
       h('div.row.between', null, [
-        h('span.num', { style: { fontSize: '26px', color: 'var(--trend)' } }, fmtWeight(weight.trend, units)),
-        h('span.small.muted', null, weight.latest != null ? `latest ${fmtWeight(weight.latest, units)}` : '')
+        h('span.num', { style: { fontSize: '26px', color: 'var(--trend)' } }, fmtWeight(weight.trend, wUnit)),
+        h('span.small.muted', null, weight.latest != null ? `latest ${fmtWeight(weight.latest, wUnit)}` : '')
       ]),
       trendChart(weight.series.slice(-42), { label: 'Weight', height: 200 }),
       chartLegend([
@@ -191,7 +195,7 @@ export function progressView() {
       ]),
       view().profile?.startWeight != null && weight.trend != null
         ? h('p.small.muted', { style: { marginTop: '8px' } },
-          `${signed(weight.trend - view().profile.startWeight, 1)} ${units === 'metric' ? 'kg' : 'lb'} since day 1.`)
+          `${signed(weight.trend - view().profile.startWeight, 1)} ${wUnit} since day 1.`)
         : null
     ]);
 
@@ -204,7 +208,7 @@ export function progressView() {
       view().waists.length
         ? h('div', null, [
             h('div.row.between', null, [
-              h('span.num', { style: { fontSize: '26px', color: 'var(--trend)' } }, fmtLength(waist.trend ?? waist.latest, units)),
+              h('span.num', { style: { fontSize: '26px', color: 'var(--trend)' } }, fmtLength(waist.trend ?? waist.latest, lUnit)),
               h('span.small.muted', null, view().profile?.startWaist != null && waist.latest != null
                 ? `${signed(waist.latest - view().profile.startWaist, 1)} since day 1`
                 : '')

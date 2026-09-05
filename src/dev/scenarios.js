@@ -28,7 +28,8 @@ export function rng(seed = 42) {
 export function baseProfile(overrides = {}) {
   const profile = {
     name: 'Test',
-    units: 'imperial',
+    weightUnit: 'lb',
+    lengthUnit: 'in',
     age: 35,
     sex: 'male',
     height: 67,
@@ -163,7 +164,7 @@ export function makeState(opts = {}) {
   return {
     ready: true,
     profile,
-    settings: { units: 'imperial', aiEndpoint: '', aiEnabled: false },
+    settings: { aiEndpoint: '', aiEnabled: false },
     weights,
     waists,
     food,

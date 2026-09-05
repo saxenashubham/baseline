@@ -3,6 +3,57 @@
 export const KG_PER_LB = 0.45359237;
 export const CM_PER_IN = 2.54;
 
+/* --------------------------------------------------------------- units */
+
+/**
+ * Weight and length units are chosen independently. "Inches and kg" is a real
+ * combination — a bathroom scale and a tape measure are two devices and there
+ * is no reason one should dictate the other.
+ *
+ * `profile.units` ('metric'|'imperial') is the pre-split field. Everything here
+ * falls back to it, so a profile written before the split keeps working with no
+ * migration step and no reinterpreted history.
+ */
+export const WEIGHT_UNITS = ['lb', 'kg'];
+export const LENGTH_UNITS = ['in', 'cm'];
+
+const normW = (u) => (u === 'kg' || u === 'metric' ? 'kg' : 'lb');
+const normL = (u) => (u === 'cm' || u === 'metric' ? 'cm' : 'in');
+
+export function weightUnit(profile) {
+  const u = profile?.weightUnit;
+  return u === 'kg' || u === 'lb' ? u : normW(profile?.units);
+}
+
+export function lengthUnit(profile) {
+  const u = profile?.lengthUnit;
+  return u === 'cm' || u === 'in' ? u : normL(profile?.units);
+}
+
+export function convertWeight(value, from, to) {
+  if (value == null || !Number.isFinite(value)) return value;
+  const a = normW(from);
+  const b = normW(to);
+  if (a === b) return value;
+  return b === 'kg' ? value * KG_PER_LB : value / KG_PER_LB;
+}
+
+export function convertLength(value, from, to) {
+  if (value == null || !Number.isFinite(value)) return value;
+  const a = normL(from);
+  const b = normL(to);
+  if (a === b) return value;
+  return b === 'cm' ? value * CM_PER_IN : value / CM_PER_IN;
+}
+
+export const toKg = (value, from) => convertWeight(value, from, 'kg');
+export const toCm = (value, from) => convertLength(value, from, 'cm');
+
+/** The label that goes after a number. Tolerates the legacy field values. */
+export function unitLabel(unit) {
+  return unit === 'metric' ? 'kg' : unit === 'imperial' ? 'lb' : unit;
+}
+
 export function todayISO(d = new Date()) {
   const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 10);
@@ -57,14 +108,16 @@ export function signed(n, places = 1, unit = '') {
   return `${sign}${fmtNum(Math.abs(n), places)}${unit}`;
 }
 
-export function fmtWeight(value, units) {
+/** @param {'kg'|'lb'|'metric'|'imperial'} unit */
+export function fmtWeight(value, unit) {
   if (value == null) return '—';
-  return `${fmtNum(value, 1)} ${units === 'metric' ? 'kg' : 'lb'}`;
+  return `${fmtNum(value, 1)} ${normW(unit)}`;
 }
 
-export function fmtLength(value, units) {
+/** @param {'cm'|'in'|'metric'|'imperial'} unit */
+export function fmtLength(value, unit) {
   if (value == null) return '—';
-  return units === 'metric' ? `${fmtNum(value, 1)} cm` : `${fmtNum(value, 1)}"`;
+  return normL(unit) === 'cm' ? `${fmtNum(value, 1)} cm` : `${fmtNum(value, 1)}"`;
 }
 
 export function fmtDuration(hours) {

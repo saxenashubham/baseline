@@ -8,7 +8,7 @@
  * impossible), network-only for the model proxy (never cache an estimate).
  */
 
-const CACHE = 'baseline-v3';
+const CACHE = 'baseline-v5';
 
 const SHELL = [
   './',

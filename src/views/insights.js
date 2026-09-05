@@ -15,7 +15,8 @@ import {
 import { barChart } from '../ui/chart.js';
 import { state, view, isReadOnly, saveReview, saveProfile, programDay } from '../core/store.js';
 import {
-  todayISO, weekStart, isoAddDays, fmtDate, fmtNum, signed, fmtDuration, fmtWeight, fmtLength
+  todayISO, weekStart, isoAddDays, fmtDate, fmtNum, signed, fmtDuration, fmtWeight, fmtLength,
+  weightUnit, lengthUnit
 } from '../core/format.js';
 import {
   buildSnapshot, classify, recommendAdjustment, fatLossConfidence, consistencyScore,
@@ -26,7 +27,8 @@ import { REVIEW_QUESTIONS } from '../domain/questions.js';
 
 export function insightsView() {
   const today = todayISO();
-  let units = view().profile?.units || 'imperial';
+  let wUnit = weightUnit(view().profile);
+  let lUnit = lengthUnit(view().profile);
 
   const noticeSlot = h('div');
   const stateCard = h('section.card');
@@ -149,7 +151,8 @@ export function insightsView() {
   /* ------------------------------------------------------------- render */
 
   function update() {
-    units = view().profile?.units || 'imperial';
+    wUnit = weightUnit(view().profile);
+    lUnit = lengthUnit(view().profile);
     fill(noticeSlot, readOnlyNotice());
     const snap = buildSnapshot(view(), today, 14);
     const streak = flatWeekStreak(view(), today);
@@ -207,8 +210,8 @@ export function insightsView() {
       h('p.card-title', null, 'The last 7 days'),
       barChart(weekBars, { target: kcalTarget }),
       h('div.grid-2', { style: { marginTop: '12px' } }, [
-        stat('Weight trend', fmtWeight(snap.weight.trend, units), signed(snap.weight.weekChange, 1)),
-        stat('Waist', fmtLength(snap.waist.trend ?? snap.waist.latest, units), signed(snap.waist.weekChange, 1)),
+        stat('Weight trend', fmtWeight(snap.weight.trend, wUnit), signed(snap.weight.weekChange, 1)),
+        stat('Waist', fmtLength(snap.waist.trend ?? snap.waist.latest, lUnit), signed(snap.waist.weekChange, 1)),
         stat('Calories', snap.intake.avgKcal ? `${fmtNum(snap.intake.avgKcal, 0)}` : '—', 'daily average'),
         stat('Protein', snap.intake.avgProtein ? `${fmtNum(snap.intake.avgProtein, 0)} g` : '—', 'daily average'),
         stat('Steps', snap.activity.avgSteps ? fmtNum(snap.activity.avgSteps, 0) : '—', 'daily average'),
@@ -314,10 +317,10 @@ export function insightsView() {
       title: `Day ${days}`,
       body: h('div', null, [
         h('h4', null, 'Body'),
-        line('Starting weight', fmtWeight(s.profile.startWeight, units)),
-        line('Ending weight', fmtWeight(last?.weight, units)),
+        line('Starting weight', fmtWeight(s.profile.startWeight, wUnit)),
+        line('Ending weight', fmtWeight(last?.weight, wUnit)),
         line('Change', signed((last?.weight ?? 0) - (s.profile.startWeight ?? 0), 1)),
-        firstWaist && lastWaist ? line('Waist', `${fmtLength(firstWaist.waist, units)} → ${fmtLength(lastWaist.waist, units)}`) : null,
+        firstWaist && lastWaist ? line('Waist', `${fmtLength(firstWaist.waist, lUnit)} → ${fmtLength(lastWaist.waist, lUnit)}`) : null,
         h('h4', null, 'Nutrition'),
         line('Average calories', avgKcal ? fmtNum(avgKcal, 0) : '—'),
         line('Days logged', `${new Set(s.food.map((f) => f.date)).size} of ${days}`),

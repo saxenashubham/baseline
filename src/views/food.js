@@ -25,11 +25,157 @@ import { todayISO, fmtNum, fmtTime, isoAddDays } from '../core/format.js';
 import {
   searchFoods, macrosFor, sumItems, estimateRange, applyPriors, portionPrior,
   usualMeals, foodKey, MEAL_TYPES, guessMealType, lookupFood,
+  defaultGrams, densityOf, servingCount,
   OIL_KCAL_PER_TSP, OIL_FAT_PER_TSP
 } from '../domain/foods.js';
 import { estimateMeal, refineMeal, AIError } from '../services/ai.js';
 import { toThumbDataURL } from '../services/image.js';
 import { parseHash, navigate } from '../core/router.js';
+
+/**
+ * One portion editor, shared by every flow that can produce an item: the photo
+ * estimate, the manual search, and a meal already logged. They all get it wrong
+ * in the same direction, so they all correct it the same way.
+ *
+ * For a food with a natural unit the count leads and grams follow. "One boiled
+ * egg" is a question a person can answer; "50 grams of egg" is not, and being
+ * unable to say "one" is what made a single egg log as 155 kcal of nothing.
+ */
+function portionSheet({ item, allowRemove = true, onSave, onRemove }) {
+  const density = densityOf(item);
+  const serving = density.serving;
+  const startGrams = Math.round(item.grams || serving?.grams || 100);
+  let grams = startGrams;
+  // Was this a bad estimate, or did they go back for more? The app cannot tell
+  // and the answer changes what it learns, so it asks — but only once the
+  // portion has actually gone up past what the photo showed.
+  let refilled = !!item.refilled;
+
+  const preview = h('p.num', { style: { fontSize: '20px', marginTop: '10px' } });
+  const detail = h('p.small.muted');
+  const countLine = h('p.small.muted');
+  const refillSlot = h('div');
+
+  // Countable things (a puri, an egg, a slice) step by the whole unit. Things
+  // served in a vessel (a katori, a glass) step by a quarter of it.
+  const stepSize = serving
+    ? (serving.grams <= 60 ? Math.max(1, Math.round(serving.grams)) : Math.max(1, Math.round(serving.grams / 4)))
+    : 10;
+
+  const gramStep = stepper({
+    value: grams,
+    step: stepSize,
+    min: 1,
+    max: 3000,
+    onChange: (g) => { grams = g; paint(); }
+  });
+
+  function paint() {
+    const m = macrosFor(density, grams);
+    setText(preview, `${m.kcal} kcal`);
+    setText(detail, `${m.protein} g protein · ${m.carbs} g carbs · ${m.fat} g fat`);
+    const count = servingCount(density, grams);
+    setText(countLine, count == null
+      ? ''
+      : `${fmtNum(count, Number.isInteger(count) ? 0 : 1)} × ${serving.label} (${serving.grams} g each)`);
+    paintRefill();
+  }
+
+  /**
+   * Only relevant when the portion has grown past the model's own estimate.
+   * Saying "I went back for more" keeps the change out of the portion-learning
+   * loop — otherwise photographing two puris and eating four teaches the app
+   * that a photo of two puris means four, and it starts inflating every future
+   * plate on its own.
+   */
+  function paintRefill() {
+    const base = item.aiGrams ?? startGrams;
+    if (!item.aiGrams || grams <= base + 1) return void fill(refillSlot, null);
+    fill(refillSlot, field('Why the change?', chipGroup({
+      options: [
+        { value: 'estimate', label: 'The photo read it wrong' },
+        { value: 'more', label: 'I went back for more' }
+      ],
+      value: refilled ? 'more' : 'estimate',
+      onChange: (v) => { refilled = v === 'more'; }
+    }), 'A second helping is not a bad estimate. Only the first teaches the app your portion sizes.'));
+  }
+
+  const countOptions = serving
+    ? (serving.grams <= 60 ? [0.5, 1, 2, 3, 4, 6, 8] : [0.5, 1, 1.5, 2, 3])
+    : null;
+
+  const quickCounts = serving
+    ? field('How many?', chipGroup({
+        options: countOptions.map((n) => ({
+          value: n,
+          label: n === 0.5 ? `½ ${serving.label}` : `${n} ${serving.label}${n === 1 ? '' : 's'}`
+        })),
+        value: null,
+        onChange: (n) => gramStep.set(Math.round(Number(n) * serving.grams))
+      }), 'Tap the count, or nudge the grams below.')
+    : field('Portion', chipGroup({
+        options: [
+          { value: 'small', label: 'Small' },
+          { value: 'medium', label: 'Medium' },
+          { value: 'large', label: 'Large' }
+        ],
+        value: item.portionSize || 'medium',
+        onChange: (size) => {
+          const base = item.aiGrams || item.grams || 150;
+          const factor = size === 'small' ? 0.7 : size === 'large' ? 1.35 : 1;
+          gramStep.set(Math.round(base * factor));
+          item.portionSize = size;
+        }
+      }));
+
+  const handle = sheet({
+    title: item.name,
+    body: h('div', null, [
+      quickCounts,
+      field('Weight as served', gramStep.el),
+      countLine,
+      preview,
+      detail,
+      refillSlot,
+      allowRemove
+        ? h('button.btn.danger.block', {
+            type: 'button',
+            style: { marginTop: '12px' },
+            onClick: () => { handle.close(true); onRemove?.(); }
+          }, 'Remove this item')
+        : null
+    ]),
+    actions: [
+      h('button.btn.primary.block', {
+        type: 'button',
+        onClick: () => {
+          handle.close(true);
+          onSave({
+            ...item,
+            grams,
+            ...macrosFor(density, grams),
+            serving: serving || item.serving || null,
+            refilled
+          });
+        }
+      }, 'Done')
+    ]
+  });
+  paint();
+  return handle;
+}
+
+/** "2 × egg · 100 g" where a natural unit exists, plain grams where it doesn't. */
+function portionLabel(item) {
+  const serving = item.serving || lookupFood(item.name)?.serving || null;
+  const grams = `${fmtNum(item.grams, 0)} g`;
+  if (!serving || !item.grams) return grams;
+  const count = item.grams / serving.grams;
+  const shown = count < 10 ? Math.round(count * 2) / 2 : Math.round(count);
+  const base = shown ? `${shown} × ${serving.label} · ${grams}` : grams;
+  return item.refilled ? `${base} · incl. seconds` : base;
+}
 
 export function foodView({ params }) {
   const today = todayISO();
@@ -194,7 +340,7 @@ export function foodView({ params }) {
           h('span.grow', null, [
             h('div.t', null, item.name),
             h('div.s', null, [
-              `${fmtNum(item.grams, 0)} g`,
+              portionLabel(item),
               item.priorApplied ? ' · your usual portion' : '',
               item.confidence === 'low' ? ' · low confidence' : ''
             ].join(''))
@@ -209,54 +355,11 @@ export function foodView({ params }) {
     }
 
     function editItem(idx) {
-      const item = items[idx];
-      const ref = lookupFood(item.name);
-      const density = ref ? { kcal: ref.kcal, p: ref.p, c: ref.c, f: ref.f } : {
-        kcal: (item.kcal / item.grams) * 100,
-        p: (item.protein / item.grams) * 100,
-        c: (item.carbs / item.grams) * 100,
-        f: (item.fat / item.grams) * 100
-      };
-      const preview = h('p.small.muted');
-      const step = stepper({
-        value: Math.round(item.grams),
-        step: 10,
-        max: 2000,
-        onChange: (grams) => {
-          const macros = macrosFor(density, grams);
-          items[idx] = { ...items[idx], grams, ...macros };
-          setText(preview, `${macros.kcal} kcal · ${macros.protein} g protein`);
-        }
+      portionSheet({
+        item: items[idx],
+        onSave: (next) => { items[idx] = next; paintItems(); },
+        onRemove: () => { items.splice(idx, 1); paintItems(); }
       });
-
-      const inner = sheet({
-        title: item.name,
-        body: h('div', null, [
-          field('Portion', chipGroup({
-            options: [
-              { value: 'small', label: 'Small' },
-              { value: 'medium', label: 'Medium' },
-              { value: 'large', label: 'Large' }
-            ],
-            value: item.portionSize || 'medium',
-            onChange: (size) => {
-              const base = item.aiGrams || item.grams;
-              const factor = size === 'small' ? 0.7 : size === 'large' ? 1.35 : 1;
-              step.set(Math.round(base * factor));
-              items[idx].portionSize = size;
-            }
-          })),
-          field('Weight as served', step.el),
-          preview,
-          h('button.btn.danger.block', {
-            type: 'button',
-            style: { marginTop: '8px' },
-            onClick: () => { items.splice(idx, 1); inner.close(true); paintItems(); }
-          }, 'Remove this item')
-        ]),
-        actions: [h('button.btn.primary.block', { type: 'button', onClick: () => { inner.close(true); paintItems(); } }, 'Done')]
-      });
-      setText(preview, `${item.kcal} kcal · ${item.protein} g protein`);
     }
 
     function paintFollowUps() {
@@ -360,6 +463,10 @@ export function foodView({ params }) {
               });
             }
             for (const item of items) {
+              // A refill is a bigger meal, not a misread photo. Feeding it to
+              // the prior would teach the app to inflate every future plate of
+              // the same food, which is a slow, invisible way to be wrong.
+              if (item.refilled) continue;
               if (item.aiGrams && Math.abs(item.aiGrams - item.grams) >= 5) {
                 await recordCorrection(foodKey(item.name), item.aiGrams, item.grams);
               }
@@ -414,10 +521,22 @@ export function foodView({ params }) {
       fill(chosenList, chosen.length
         ? [
             h('h2.section', null, 'This meal'),
-            ...chosen.map((item, idx) => h('div.metric', null, [
-              h('span.metric-name', null, `${item.name} · ${item.grams} g`),
-              h('span.metric-val', null, `${item.kcal} kcal`),
-              h('button.btn.quiet', { type: 'button', onClick: () => { chosen.splice(idx, 1); paintChosen(); } }, 'Remove')
+            ...chosen.map((item, idx) => h('button.item', {
+              type: 'button',
+              onClick: () => portionSheet({
+                item,
+                onSave: (next) => { chosen[idx] = next; paintChosen(); },
+                onRemove: () => { chosen.splice(idx, 1); paintChosen(); }
+              })
+            }, [
+              h('span.grow', null, [
+                h('div.t', null, item.name),
+                h('div.s', null, portionLabel(item))
+              ]),
+              h('span.r', null, [
+                h('div.kc', null, `${item.kcal} kcal`),
+                h('div.s', null, 'Edit')
+              ])
             ]))
           ]
         : null);
@@ -429,13 +548,30 @@ export function foodView({ params }) {
         ? found.map((food) => h('button.item', {
             type: 'button',
             onClick: () => {
-              const prior = portionPrior(state.corrections, food.name);
-              const grams = prior?.grams || 150;
-              chosen.push({ name: food.name, grams, ...macrosFor(food, grams), confidence: 'medium', portionSize: 'medium' });
-              paintChosen();
+              // Open the portion editor instead of committing a guess. The old
+              // path pushed a flat 150 g straight into the meal with no way
+              // back, which is how one boiled egg became three.
+              const grams = defaultGrams(food, state.corrections);
+              portionSheet({
+                item: {
+                  name: food.name,
+                  grams,
+                  ...macrosFor(food, grams),
+                  serving: food.serving || null,
+                  confidence: 'medium',
+                  portionSize: 'medium'
+                },
+                allowRemove: false,
+                onSave: (next) => { chosen.push(next); paintChosen(); }
+              });
             }
           }, [
-            h('span.grow', null, [h('div.t', null, food.name), h('div.s', null, `${food.kcal} kcal / 100 g`)]),
+            h('span.grow', null, [
+              h('div.t', null, food.name),
+              h('div.s', null, food.serving
+                ? `${food.kcal} kcal / 100 g · 1 ${food.serving.label} ≈ ${food.serving.grams} g`
+                : `${food.kcal} kcal / 100 g`)
+            ]),
             h('span.r', null, h('div.s', null, 'Add'))
           ]))
         : query ? h('div.empty', null, 'No match. Use Quick add for anything not listed.') : null);
@@ -542,33 +678,166 @@ export function foodView({ params }) {
     update();
   }
 
+  /**
+   * A logged meal is still editable. Getting the portion wrong and only
+   * noticing at the end of the day was previously a choice between living with
+   * it and deleting the whole entry.
+   */
   function openEntry(id) {
     const entry = view().food.find((f) => f.id === id);
     if (!entry) return;
+    const editable = !isReadOnly();
+    let items = (entry.items || []).map((i) => ({ ...i }));
+    let dirty = false;
+
+    const list = h('div');
+    const totalLine = h('div.metric');
+    const rangeLine = h('p.small.muted');
+
+    function paint() {
+      const t = sumItems(items);
+      fill(list, items.map((item, idx) => {
+        const row = [
+          h('span.grow', null, [
+            h('div.t', null, item.name),
+            h('div.s', null, portionLabel(item))
+          ]),
+          h('span.r', null, [
+            h('div.kc', null, `${fmtNum(item.kcal, 0)} kcal`),
+            editable ? h('div.s', null, 'Edit') : null
+          ].filter(Boolean))
+        ];
+        return editable
+          ? h('button.item', {
+              type: 'button',
+              onClick: () => portionSheet({
+                item,
+                onSave: (next) => { items[idx] = next; dirty = true; paint(); },
+                onRemove: () => { items.splice(idx, 1); dirty = true; paint(); }
+              })
+            }, row)
+          : h('div.item', null, row);
+      }));
+      fill(totalLine, [
+        h('span.metric-name', null, h('strong', null, 'Total')),
+        h('span.metric-val', null, `${fmtNum(t.kcal, 0)} kcal · ${fmtNum(t.protein, 0)} g protein`)
+      ]);
+      setText(rangeLine, dirty
+        ? 'Edited. Save to apply — the range is recalculated from the new total.'
+        : entry.range
+          ? `Logged as ${entry.range.point} kcal from a ${entry.range.low}–${entry.range.high} range.`
+          : '');
+    }
+
+    /**
+     * A refill, without a second photograph.
+     *
+     * The plate in the picture is not always the meal. Going back for two more
+     * puris is the common case and it was previously unrepresentable — you
+     * either photographed the refill as a separate meal or you under-logged.
+     * This adds helpings to the items already in the entry and marks them, so
+     * the extra food never reaches the portion-learning loop.
+     */
+    function openSecondHelping() {
+      const extra = items.map(() => 0);
+      const rows = h('div');
+
+      const paintRows = () => fill(rows, items.map((item, idx) => {
+        const serving = item.serving || lookupFood(item.name)?.serving || null;
+        const unit = serving ? serving.grams : Math.max(10, Math.round((item.grams || 100) / 2));
+        const label = h('span.metric-val');
+        const paintLabel = () => setText(label, extra[idx]
+          ? `+${fmtNum(extra[idx] / unit, Number.isInteger(extra[idx] / unit) ? 0 : 1)} × ${serving?.label || 'portion'}`
+          : '—');
+        const step = stepper({
+          value: extra[idx],
+          step: Math.max(1, Math.round(unit)),
+          min: 0,
+          max: 3000,
+          onChange: (g) => { extra[idx] = g; paintLabel(); }
+        });
+        paintLabel();
+        return h('div', { style: { marginBottom: '10px' } }, [
+          h('div.row.between', null, [h('strong', null, item.name), label]),
+          step.el
+        ]);
+      }));
+      paintRows();
+
+      const inner = sheet({
+        title: 'Second helping',
+        body: h('div', null, [
+          h('p.small.muted', null,
+            'How much more of each you went back for. No second photo needed.'),
+          rows,
+          callout('Counted as extra food, not as a correction to the estimate, so it will not change what the app expects your portions to be.')
+        ]),
+        actions: [
+          h('button.btn.primary.block', {
+            type: 'button',
+            onClick: () => {
+              let added = false;
+              items = items.map((item, idx) => {
+                if (!extra[idx]) return item;
+                added = true;
+                const grams = Math.round((item.grams || 0) + extra[idx]);
+                return { ...item, grams, ...macrosFor(densityOf(item), grams), refilled: true };
+              });
+              inner.close(true);
+              if (!added) return;
+              dirty = true;
+              paint();
+            }
+          }, 'Add it')
+        ]
+      });
+    }
+
     const handle = sheet({
       title: entry.mealType,
       body: h('div', null, [
         entry.photoThumb ? h('img.thumb', { src: entry.photoThumb, alt: '' }) : null,
-        h('div', null, (entry.items || []).map((i) => h('div.metric', null, [
-          h('span.metric-name', null, `${i.name} · ${fmtNum(i.grams, 0)} g`),
-          h('span.metric-val', null, `${fmtNum(i.kcal, 0)} kcal`)
-        ]))),
-        h('div.metric', null, [
-          h('span.metric-name', null, h('strong', null, 'Total')),
-          h('span.metric-val', null, `${fmtNum(entry.totals?.kcal, 0)} kcal`)
-        ]),
-        entry.range
-          ? h('p.small.muted', null, `Logged as ${entry.range.point} kcal from a ${entry.range.low}–${entry.range.high} range.`)
+        editable ? h('p.small.muted', null, 'Tap an item to change the portion.') : null,
+        list,
+        totalLine,
+        rangeLine,
+        editable && items.length
+          ? h('button.btn.block', {
+              type: 'button',
+              style: { marginTop: '12px' },
+              onClick: openSecondHelping
+            }, 'I went back for more')
           : null
       ]),
       actions: [
-        isReadOnly() ? null : h('button.btn.danger', {
+        editable ? h('button.btn.danger', {
           type: 'button',
           onClick: async () => { await removeFoodEntry(id); handle.close(true); update(); }
-        }, 'Delete'),
+        }, 'Delete') : null,
+        editable ? h('button.btn.primary', {
+          type: 'button',
+          onClick: async () => {
+            if (!dirty) return handle.close();
+            if (!items.length) {
+              await removeFoodEntry(id);
+            } else {
+              const t = sumItems(items);
+              await saveFoodEntry({
+                ...entry,
+                items,
+                totals: t,
+                range: estimateRange(t, entry.confidence || 'medium')
+              });
+            }
+            handle.close(true);
+            toast('Updated.');
+            update();
+          }
+        }, 'Save') : null,
         h('button.btn', { type: 'button', onClick: () => handle.close() }, 'Close')
       ].filter(Boolean)
     });
+    paint();
   }
 
   /* ------------------------------------------------------------ render */

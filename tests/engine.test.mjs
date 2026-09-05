@@ -19,9 +19,13 @@ import {
 } from '../src/domain/targets.js';
 import { trendSummary, slopePerDay, direction, densify, rollingMean } from '../src/domain/trends.js';
 import {
-  portionPrior, usualMeals, estimateRange, macrosFor, lookupFood, searchFoods, sumItems, foodKey
+  portionPrior, usualMeals, estimateRange, macrosFor, lookupFood, searchFoods, sumItems, foodKey,
+  FOOD_DB, defaultGrams, servingCount, densityOf
 } from '../src/domain/foods.js';
-import { todayISO, isoAddDays, weekStart, daysBetween, median } from '../src/core/format.js';
+import {
+  todayISO, isoAddDays, weekStart, daysBetween, median,
+  weightUnit, lengthUnit, convertWeight, convertLength, fmtWeight, fmtLength
+} from '../src/core/format.js';
 
 const today = todayISO();
 const decide = (state, windowDays = 14) => {
@@ -440,6 +444,132 @@ suite('aggregation', () => {
 
   test('median handles even-length input', () => {
     equal(median([1, 2, 3, 4]), 2.5);
+  });
+});
+
+/* -------------------------------------------------------------- units */
+
+suite('units', () => {
+  test('weight and length are read independently', () => {
+    const p = { weightUnit: 'kg', lengthUnit: 'in' };
+    equal(weightUnit(p), 'kg');
+    equal(lengthUnit(p), 'in');
+    equal(fmtWeight(80, weightUnit(p)), '80.0 kg');
+    equal(fmtLength(34, lengthUnit(p)), '34.0"');
+  });
+
+  test('a pre-split profile still resolves both units', () => {
+    equal(weightUnit({ units: 'metric' }), 'kg');
+    equal(lengthUnit({ units: 'metric' }), 'cm');
+    equal(weightUnit({ units: 'imperial' }), 'lb');
+    equal(lengthUnit({ units: 'imperial' }), 'in');
+    equal(weightUnit({}), 'lb');
+  });
+
+  test('the explicit fields win over the legacy one', () => {
+    equal(weightUnit({ units: 'imperial', weightUnit: 'kg' }), 'kg');
+    equal(lengthUnit({ units: 'metric', lengthUnit: 'in' }), 'in');
+  });
+
+  test('conversion round-trips without drift', () => {
+    near(convertWeight(convertWeight(180, 'lb', 'kg'), 'kg', 'lb'), 180, 0.001);
+    near(convertLength(convertLength(34, 'in', 'cm'), 'cm', 'in'), 34, 0.001);
+    near(convertWeight(180, 'lb', 'kg'), 81.65, 0.01);
+    near(convertLength(34, 'in', 'cm'), 86.36, 0.01);
+  });
+
+  test('deadbands take weight from one unit and waist from the other', () => {
+    const mixed = buildSnapshot(
+      makeState({ days: 30, profile: baseProfile({ weightUnit: 'kg', lengthUnit: 'in' }) }),
+      today, 14
+    );
+    equal(mixed.weightUnit, 'kg');
+    equal(mixed.lengthUnit, 'in');
+    equal(mixed.bands.weight, 0.23);   // kg table
+    equal(mixed.bands.waist, 0.2);     // inch table
+  });
+
+  test('expenditure maths follows the weight unit alone', () => {
+    // 1 kg/week of loss is ~7716 kcal/week, whatever the tape measure says.
+    const est = observedTDEE({
+      avgIntake: 2000, trendChange: -2, days: 14, weightUnit: 'kg', loggedDayFraction: 1
+    });
+    near(est, 2000 + (2 * 7716) / 14, 5);
+  });
+});
+
+/* --------------------------------------------------------- food portions */
+
+suite('food portions', () => {
+  test('a food with a natural unit defaults to one of it, not to 150 g', () => {
+    const egg = lookupFood('Whole egg (boiled)');
+    equal(egg.serving.grams, 50);
+    equal(defaultGrams(egg, []), 50);
+    // The bug this replaces: one boiled egg logged as 150 g.
+    equal(macrosFor(egg, defaultGrams(egg, [])).kcal, 78);
+  });
+
+  test('a personal prior still outranks the natural serving', () => {
+    const rice = lookupFood('Basmati rice (cooked)');
+    const corrections = [180, 180, 180].map((userGrams) => ({
+      foodKey: foodKey(rice.name), aiGrams: 150, userGrams
+    }));
+    equal(defaultGrams(rice, corrections), 180);
+  });
+
+  test('serving counts read back from grams', () => {
+    const egg = lookupFood('Whole egg (boiled)');
+    equal(servingCount(egg, 100), 2);
+    equal(servingCount({ serving: null }, 100), null);
+  });
+
+  test('density is recovered for an item that is not in the table', () => {
+    const d = densityOf({ name: 'Something homemade', grams: 200, kcal: 300, protein: 20, carbs: 10, fat: 12 });
+    near(d.kcal, 150, 0.01);
+    near(d.p, 10, 0.01);
+  });
+
+  test('every food carries a serving weight', () => {
+    const missing = FOOD_DB.filter((f) => !f.serving || !(f.serving.grams > 0));
+    equal(missing.length, 0, `no serving weight for: ${missing.map((f) => f.name).join(', ')}`);
+  });
+
+  test('search matches words in any order, not just adjacent ones', () => {
+    // "boiled egg" used to find nothing: the words are in the name but the
+    // table spells it "Whole egg (boiled)".
+    equal(searchFoods('boiled egg')[0].name, 'Whole egg (boiled)');
+    equal(searchFoods('egg boiled')[0].name, 'Whole egg (boiled)');
+    equal(searchFoods('whole wheat roti')[0].name, 'Roti (whole wheat)');
+  });
+
+  test('an exact phrase still outranks a scattered-word match', () => {
+    equal(searchFoods('puri')[0].name, 'Puri');
+    equal(searchFoods('paneer')[0].name.startsWith('Paneer'), true);
+  });
+
+  test('search finds a food by its other name', () => {
+    equal(searchFoods('colocasia')[0].name, 'Arbi / colocasia sabzi');
+    equal(searchFoods('arbi')[0].name, 'Arbi / colocasia sabzi');
+    equal(searchFoods('dahi')[0].name, 'Curd / plain yogurt');
+  });
+
+  test('a nonsense query returns nothing rather than everything', () => {
+    equal(searchFoods('zzzz').length, 0);
+    equal(searchFoods('').length, 0);
+  });
+
+  test('macros agree with the stated calories (Atwater)', () => {
+    // Ethanol carries 7 kcal/g and fibre less than 4, so these are expected to
+    // miss and are named rather than silently tolerated.
+    const exempt = new Set([
+      'Beer', 'Red wine', 'Apple', 'Banana', 'Avocado', 'Tofu (firm)',
+      'Cucumber salad', 'Mixed green salad (undressed)'
+    ]);
+    const off = FOOD_DB
+      .filter((f) => !exempt.has(f.name))
+      .map((f) => ({ name: f.name, drift: (f.p * 4 + f.c * 4 + f.f * 9 - f.kcal) / f.kcal }))
+      .filter((r) => Math.abs(r.drift) > 0.08);
+    equal(off.length, 0, `calories do not match macros for: ${off.map((r) => r.name).join(', ')}`);
   });
 });
 

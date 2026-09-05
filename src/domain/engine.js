@@ -13,9 +13,11 @@
  * at coverage rather than at calories.
  */
 
-import { isoAddDays, todayISO, mean, median, round } from '../core/format.js';
+import {
+  isoAddDays, todayISO, mean, median, round, weightUnit, lengthUnit
+} from '../core/format.js';
 import { trendSummary, direction, groupByWeek } from './trends.js';
-import { observedTDEE, biasStability } from './targets.js';
+import { observedTDEE, biasStability, KCAL_PER_UNIT_FAT } from './targets.js';
 
 export const STATES = {
   ON_TRACK: 'on_track',
@@ -39,11 +41,23 @@ export const STATE_COPY = {
 
 /* ------------------------------------------------------------ deadbands */
 
-function bands(units) {
-  return units === 'metric'
-    ? { weight: 0.23, waist: 0.5, fast: 0.68, slow: 0.23, good: [0.34, 0.68] }
-    : { weight: 0.5,  waist: 0.2, fast: 1.5,  slow: 0.5,  good: [0.75, 1.5] };
+/**
+ * The two axes are independent: the weight bands come from the weight unit, the
+ * waist band from the length unit. Someone weighing in kg and measuring in
+ * inches gets the kg weight bands and the inch waist band, which is the point.
+ *
+ * They stay separate tables rather than a conversion — 0.5 lb and 0.23 kg are
+ * each "the smallest weekly move worth reading on that scale", not one
+ * converted into the other.
+ */
+export function bands(wUnit, lUnit) {
+  const w = wUnit === 'kg'
+    ? { weight: 0.23, fast: 0.68, slow: 0.23, good: [0.34, 0.68] }
+    : { weight: 0.5,  fast: 1.5,  slow: 0.5,  good: [0.75, 1.5] };
+  return { ...w, waist: lUnit === 'cm' ? 0.5 : 0.2 };
 }
+
+const bandsFor = (profile) => bands(weightUnit(profile), lengthUnit(profile));
 
 /* ------------------------------------------------------------- strength */
 
@@ -115,7 +129,8 @@ export function avgDailyIntake(foodEntries, fromISO, toISO) {
  */
 export function buildSnapshot(state, endISO = todayISO(), days = 14) {
   const profile = state.profile || {};
-  const units = profile.units || 'imperial';
+  const wUnit = weightUnit(profile);
+  const lUnit = lengthUnit(profile);
   const from = isoAddDays(endISO, -(days - 1));
   const dayList = [];
   for (let d = from; d <= endISO; d = isoAddDays(d, 1)) dayList.push(d);
@@ -157,14 +172,14 @@ export function buildSnapshot(state, endISO = todayISO(), days = 14) {
     avgIntake,
     trendChange: weight.weekChange != null ? weight.weekChange * 2 : null,
     days: 14,
-    units,
+    weightUnit: wUnit,
     loggedDayFraction: loggedFraction
   });
   const est28 = observedTDEE({
     avgIntake: avgDailyIntake(state.food, isoAddDays(endISO, -27), endISO),
     trendChange: weight.perWeek != null ? (weight.perWeek / 7) * 28 : null,
     days: 28,
-    units,
+    weightUnit: wUnit,
     loggedDayFraction: loggedFraction
   });
   const stability = biasStability([est14, est28]);
@@ -172,8 +187,9 @@ export function buildSnapshot(state, endISO = todayISO(), days = 14) {
   return {
     endISO,
     days,
-    units,
-    bands: bands(units),
+    weightUnit: wUnit,
+    lengthUnit: lUnit,
+    bands: bands(wUnit, lUnit),
     weight,
     waist,
     strength,
@@ -321,7 +337,9 @@ export function recommendAdjustment(snap, classification, historyWeeks = 0) {
       }
       // Prefer the observed number over the fixed table when it is trustworthy.
       if (trust === 'high' && snap.expenditure.avg && targets.kcal) {
-        const suggested = Math.round(snap.expenditure.avg - (b.good[0] * (snap.units === 'metric' ? 7716 : 3500)) / 7);
+        const suggested = Math.round(
+          snap.expenditure.avg - (b.good[0] * KCAL_PER_UNIT_FAT[snap.weightUnit]) / 7
+        );
         const delta = Math.max(-250, Math.min(-75, suggested - targets.kcal));
         return {
           action: 'decrease',
@@ -425,8 +443,7 @@ export function consistencyScore(state, endISO = todayISO(), days = 7) {
  * Looks for a plausible cause in yesterday's own data before speculating.
  */
 export function fluctuationNote(state, endISO = todayISO()) {
-  const units = state.profile?.units || 'imperial';
-  const b = bands(units);
+  const b = bandsFor(state.profile);
   const today = state.weights.find((w) => w.date === endISO);
   const yesterdayISO = isoAddDays(endISO, -1);
   const yesterday = state.weights.find((w) => w.date === yesterdayISO);
@@ -458,8 +475,7 @@ export function fluctuationNote(state, endISO = todayISO()) {
 
 /** How many consecutive recent weeks were flat — feeds the plateau rules. */
 export function flatWeekStreak(state, endISO = todayISO()) {
-  const units = state.profile?.units || 'imperial';
-  const b = bands(units);
+  const b = bandsFor(state.profile);
   const weeks = groupByWeek(state.weights.filter((w) => w.date <= endISO)).slice(-6);
   let streak = 0;
   for (let i = weeks.length - 1; i > 0; i -= 1) {
