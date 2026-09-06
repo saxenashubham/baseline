@@ -8,13 +8,20 @@
  * impossible), network-only for the model proxy (never cache an estimate).
  */
 
-const CACHE = 'baseline-v5';
+const CACHE = 'baseline-v6';
 
 const SHELL = [
   './',
   './index.html',
   './styles.css',
   './manifest.webmanifest',
+  './icons/favicon.ico',
+  './icons/icon-32.png',
+  './icons/icon-180.png',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-192.png',
+  './icons/icon-maskable-512.png',
   './src/main.js',
   './src/core/dom.js',
   './src/core/db.js',
